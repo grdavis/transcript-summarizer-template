@@ -3,14 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-from zoneinfo import ZoneInfo
-
 from jobs.base import Job, SourceResult, run_job
-
-TZ = ZoneInfo("America/Los_Angeles")
 
 
 @dataclass
@@ -31,6 +26,62 @@ def _job_with_source(result: SourceResult) -> Job:
         prompt="Summarize this.",
         build_source=lambda: FakeSource(result),
     )
+
+
+@patch("jobs.base.GmailClient")
+@patch("jobs.base.generate_audio", return_value=b"fake-mp3")
+@patch("jobs.base.get_api_key", return_value="test-key")
+@patch("jobs.base.generate_content", return_value="## Briefing\n\nSummary text.")
+@patch("jobs.base.send_email")
+def test_run_job_generates_audio_for_daily_jobs(
+    mock_send, mock_generate, _mock_key, mock_audio, mock_client_cls
+):
+    deliver_client = MagicMock()
+    mock_client_cls.return_value = deliver_client
+    job = _job_with_source(SourceResult(prompt_text="Source text here.", has_content=True))
+
+    run_job(job, dry_run=False)
+
+    mock_audio.assert_called_once()
+    assert mock_send.call_args.kwargs["audio_bytes"] == b"fake-mp3"
+
+
+@patch("jobs.base.generate_audio")
+@patch("jobs.base.get_api_key", return_value="test-key")
+@patch("jobs.base.generate_content", return_value="## Briefing\n\nSummary text.")
+@patch("jobs.base.send_email")
+def test_run_job_skips_audio_on_dry_run(mock_send, _mock_generate, _mock_key, mock_audio):
+    job = _job_with_source(SourceResult(prompt_text="Source text here.", has_content=True))
+
+    run_job(job, dry_run=True)
+
+    mock_audio.assert_not_called()
+    mock_send.assert_not_called()
+
+
+@patch("jobs.base.GmailClient")
+@patch("jobs.base.generate_audio")
+@patch("jobs.base.get_api_key", return_value="test-key")
+@patch("jobs.base.generate_content", return_value="Body text.")
+@patch("jobs.base.send_email")
+def test_run_job_skips_audio_for_weekly_jobs(
+    mock_send, _mock_generate, _mock_key, mock_audio, mock_client_cls
+):
+    mock_client_cls.return_value = MagicMock()
+    job = Job(
+        key="test",
+        display_name="Test",
+        group="weekly",
+        subject_prefix="Weekly Summary",
+        intro_template="Intro <strong>{date}</strong>.",
+        prompt="Summarize.",
+        build_source=lambda: FakeSource(SourceResult(prompt_text="Transcripts.", has_content=True)),
+    )
+
+    run_job(job, dry_run=False)
+
+    mock_audio.assert_not_called()
+    assert mock_send.call_args.kwargs["audio_bytes"] is None
 
 
 @patch("jobs.base.GmailClient")

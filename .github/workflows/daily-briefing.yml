@@ -37,4 +37,5 @@ jobs:
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
         run: python run.py --group daily

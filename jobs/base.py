@@ -9,6 +9,7 @@ from typing import Callable, Protocol
 from zoneinfo import ZoneInfo
 
 from email_delivery import send_email
+from elevenlabs_client import clean_for_tts, generate_audio, get_api_key
 from gmail_client import GmailClient
 from summarizer import generate_content
 
@@ -97,12 +98,21 @@ def run_job(job: Job, *, dry_run: bool = False) -> bool:
     else:
         markdown_body = summary
 
+    audio_bytes = None
+    if get_api_key() and not dry_run and job.group == "daily":
+        try:
+            audio_bytes = generate_audio(clean_for_tts(markdown_body))
+        except Exception as exc:
+            print(f"[{job.key}] Failed to generate audio: {exc}", file=sys.stderr)
+
     if dry_run:
         print(f"\n--- DRY RUN: {job.key} ---")
         print(f"Subject: {subject}")
         if result.dry_run_summary:
             print(result.dry_run_summary)
         print(markdown_body)
+        if get_api_key() and job.group == "daily":
+            print("Would generate audio attachment using ElevenLabs API.")
         print(f"--- END DRY RUN: {job.key} ---\n")
         return True
 
@@ -114,6 +124,7 @@ def run_job(job: Job, *, dry_run: bool = False) -> bool:
             markdown_body=markdown_body,
             date_str=date_display,
             intro_template=job.intro_template,
+            audio_bytes=audio_bytes,
             gmail_client=deliver_client,
         )
         if result.on_success is not None:

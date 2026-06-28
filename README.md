@@ -2,14 +2,16 @@
 
 A **template** for Python pipelines that collect text, summarize it with **Gemini**, and deliver styled emails through **Gmail**. Every job follows the same shape:
 
-**text → LLM + prompt → email**
+**text → LLM + prompt → email** (optional **MP3** for daily jobs)
 
 ```mermaid
 flowchart LR
   subgraph job [Job]
     src[Source.collect] --> prompt[Job.prompt + content]
     prompt --> llm[summarizer.generate_content]
+    llm --> tts[elevenlabs_client.generate_audio]
     llm --> mail[email_delivery.send_email]
+    tts --> mail
     mail --> hook[SourceResult.on_success]
   end
 ```
@@ -19,13 +21,14 @@ This repo ships two **worked examples** you can copy and adapt:
 1. **NPR Indicator** (`npr_indicator`) — scrape podcast transcripts from RSS + HTML (the primary extension example).
 2. **Newsletter example** (`newsletter_example`) — read allowlisted senders from a Gmail inbox (placeholder senders; replace with yours).
 
-Delivery, HTML rendering, Gemini retry/fallback, and CI plumbing are shared — you usually only add a `Source` + `Job`.
+Delivery, HTML rendering, Gemini retry/fallback, optional ElevenLabs TTS, and CI plumbing are shared — you usually only add a `Source` + `Job`.
 
 ## Requirements
 
 - Python 3.11+ (matches CI)
 - [Gemini API key](https://ai.google.dev/)
 - Gmail account with 2FA + [App Password](https://myaccount.google.com/apppasswords) (IMAP read + email delivery)
+- **Audio briefings (optional):** [ElevenLabs](https://elevenlabs.io/) API key with `text_to_speech` and `voices_read` permissions
 
 ## Quick start
 
@@ -53,6 +56,8 @@ python run.py --group daily
 python run.py --group weekly
 ```
 
+`--dry-run` does not call ElevenLabs; audio is only generated on live **daily** runs when `ELEVENLABS_API_KEY` is set.
+
 ### Built-in example jobs
 
 | Key | Group | Description |
@@ -78,6 +83,7 @@ pytest -q
 | `BRIEFING_TO_EMAIL` | No | Email recipient (defaults to `GMAIL_ADDRESS`) |
 | `BRIEFING_DELIVERY` | No | `imap` (default for self-send) or `smtp` |
 | `BRIEFING_LOOKBACK_HOURS` | No | Inbox lookback window (default `24`) |
+| `ELEVENLABS_API_KEY` | No | If set, daily jobs attach an MP3 audio briefing (ElevenLabs `eleven_turbo_v2_5`) |
 | `SUMMARY_WEEK_REFERENCE` | No | Pin NPR calendar week for testing |
 
 ## Project layout
@@ -93,8 +99,25 @@ pytest -q
 | `email_html.py` | Shared Markdown → styled HTML |
 | `summarizer.py` | Gemini client with retry logic and model fallback |
 | `gmail_client.py` | Gmail IMAP read + mark-as-read |
+| `elevenlabs_client.py` | Optional ElevenLabs TTS for MP3 audio briefings |
 | `scraper.py` | NPR RSS + transcript fetch — **copy for other podcasts** |
 | `summaries/` | Saved NPR weekly summaries (`on_success` hook) |
+
+## Audio briefings
+
+When `ELEVENLABS_API_KEY` is set, each live **daily** job also generates an MP3 via ElevenLabs and attaches it to the email as `briefing.mp3`.
+
+- **Model:** `eleven_turbo_v2_5`
+- **Voice:** Callum (default voice ID in `elevenlabs_client.py`)
+- **Dry run:** `--dry-run` skips ElevenLabs to avoid API usage
+- **Weekly jobs:** NPR summaries are text-only (no audio attachment)
+- **Failure behavior:** If audio generation fails, the text briefing still sends
+
+The pipeline strips markdown formatting via `clean_for_tts()` before sending text to ElevenLabs so headings and links sound natural when spoken.
+
+Create a restricted ElevenLabs API key with only `text_to_speech` and `voices_read`. MP3 attachments are a few MB each; consider a Gmail filter to auto-delete briefing emails after ~14 days.
+
+To change the voice, pass a different `voice_id` to `generate_audio()` in [`elevenlabs_client.py`](elevenlabs_client.py).
 
 ## Customize the NPR scraper (extension example)
 
@@ -121,7 +144,7 @@ Duplicate the example job for multiple categories (e.g. tech, sports) with diffe
 
 ## Add a new job from scratch
 
-You do **not** need to touch delivery, HTML rendering, or Gemini calls.
+You do **not** need to touch delivery, HTML rendering, Gemini calls, or TTS wiring.
 
 ### 1. Write a `Source`
 
@@ -159,6 +182,8 @@ Job(
 )
 ```
 
+Daily jobs with `group="daily"` automatically get MP3 attachments when `ELEVENLABS_API_KEY` is set.
+
 ### 3. Test and run
 
 ```bash
@@ -169,7 +194,7 @@ python run.py --only my_job
 
 ## GitHub Actions
 
-Configure repository secrets: `GEMINI_API_KEY`, optional `GEMINI_MODELS` (or legacy `GEMINI_MODEL`), `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`.
+Configure repository secrets: `GEMINI_API_KEY`, optional `GEMINI_MODELS` (or legacy `GEMINI_MODEL`), `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, optional `ELEVENLABS_API_KEY`.
 
 ### Daily newsletter (example)
 

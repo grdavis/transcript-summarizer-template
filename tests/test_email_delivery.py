@@ -108,3 +108,29 @@ def test_send_email_smtp(mock_smtp_cls):
     assert len(parts) == 2
     assert parts[0].get_content_type() == "text/plain"
     assert parts[1].get_content_type() == "text/html"
+
+
+def test_send_email_attaches_mp3_when_audio_provided():
+    mock_client = MagicMock()
+
+    with patch.dict(
+        os.environ,
+        {
+            "GMAIL_ADDRESS": "me@gmail.com",
+            "GMAIL_APP_PASSWORD": "app-password",
+            "BRIEFING_TO_EMAIL": "me@gmail.com",
+        },
+        clear=False,
+    ):
+        send_email(
+            subject="Newsletter Briefing - June 25, 2026",
+            markdown_body="## Briefing\n\nContent.",
+            date_str="June 25, 2026",
+            intro_template="Intro <strong>{date}</strong>.",
+            audio_bytes=b"fake-mp3-bytes",
+            gmail_client=mock_client,
+        )
+
+    raw = mock_client.append_to_inbox.call_args[0][0]
+    assert b"briefing.mp3" in raw
+    assert b"audio/mpeg" in raw
