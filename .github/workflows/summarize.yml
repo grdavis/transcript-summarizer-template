@@ -1,0 +1,38 @@
+name: Weekly NPR Indicator Summarizer
+
+on:
+  schedule:
+    # Run every Friday at 22:00 UTC (afternoon in US timezones).
+    - cron: "0 22 * * 5"
+  workflow_dispatch:
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run weekly jobs
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODELS: ${{ secrets.GEMINI_MODELS }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python run.py --group weekly
+
+      # NPR summaries are also saved locally via NprIndicatorSource.on_success.
+      # To commit them back to the repo, add a git commit/push step here.

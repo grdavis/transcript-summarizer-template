@@ -1,0 +1,7 @@
+From: Test Sender <newsletter@example.com>
+To: Reader <reader@example.com>
+Subject: HTML newsletter
+Date: Wed, 25 Jun 2026 09:30:00 -0700
+Content-Type: text/html; charset="utf-8"
+
+<html><body><h1>Headline</h1><p>HTML body text for the briefing.</p></body></html>

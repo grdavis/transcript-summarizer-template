@@ -1,0 +1,18 @@
+From: Test Sender <newsletter@example.com>
+To: Reader <reader@example.com>
+Subject: Multipart newsletter
+Date: Wed, 25 Jun 2026 10:00:00 -0700
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary42"
+
+--boundary42
+Content-Type: text/plain; charset="utf-8"
+
+Plain part should win over HTML.
+
+--boundary42
+Content-Type: text/html; charset="utf-8"
+
+<html><body><p>HTML fallback</p></body></html>
+
+--boundary42--
