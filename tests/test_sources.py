@@ -65,16 +65,18 @@ def test_gmail_source_on_success_marks_read(mock_client_cls):
     mark_client.mark_as_read.assert_called_once_with(["100"])
 
 
+def _episode(title: str = "Jobs report", slug: str = "jobs") -> dict:
+    return {
+        "title": title,
+        "published": "2026-08-21",
+        "transcript_url": f"https://example.com/{slug}",
+    }
+
+
 @patch("jobs.sources.fetch_transcript", return_value="Transcript text.")
 @patch("jobs.sources.get_episodes_for_calendar_week")
 def test_npr_source_collects_transcripts(mock_get_episodes, mock_fetch):
-    mock_get_episodes.return_value = [
-        {
-            "title": "Jobs report",
-            "published": "2026-06-25",
-            "transcript_url": "https://example.com/transcript",
-        }
-    ]
+    mock_get_episodes.return_value = [_episode()]
 
     source = NprIndicatorSource()
     result = source.collect()
@@ -88,6 +90,89 @@ def test_npr_source_collects_transcripts(mock_get_episodes, mock_fetch):
 @patch("jobs.sources.get_episodes_for_calendar_week", return_value=[])
 def test_npr_source_empty_week(mock_get_episodes):
     source = NprIndicatorSource()
+    result = source.collect()
+
+    assert result.has_content is False
+
+
+@patch("jobs.sources.fetch_transcript")
+@patch("jobs.sources.get_episodes_for_calendar_week")
+def test_npr_source_retries_then_includes_late_friday_transcript(
+    mock_get_episodes, mock_fetch
+):
+    friday = _episode(
+        "EV sales slow, US Treasury yields grow",
+        slug="friday",
+    )
+    thursday = _episode("Is bankruptcy really all that bad?", slug="thursday")
+    mock_get_episodes.return_value = [thursday, friday]
+    mock_fetch.side_effect = [
+        "Thursday transcript.",
+        None,
+        "Friday transcript.",
+    ]
+    sleeps: list[float] = []
+
+    source = NprIndicatorSource(retry_attempts=3, retry_delay_seconds=20, sleep=sleeps.append)
+    result = source.collect()
+
+    assert result.has_content is True
+    assert "Thursday transcript." in result.prompt_text
+    assert "Friday transcript." in result.prompt_text
+    assert "EPISODE: EV sales slow" in result.prompt_text
+    assert sleeps == [20]
+    assert mock_fetch.call_count == 3
+
+
+@patch("jobs.sources.fetch_transcript")
+@patch("jobs.sources.get_episodes_for_calendar_week")
+def test_npr_source_skips_unpublished_episode_and_keeps_the_rest(
+    mock_get_episodes, mock_fetch
+):
+    mock_get_episodes.return_value = [
+        _episode("Monday show", slug="mon"),
+        _episode("Friday indicators", slug="fri"),
+    ]
+    mock_fetch.side_effect = lambda url: (
+        "Monday transcript." if url.endswith("/mon") else None
+    )
+    sleeps: list[float] = []
+
+    source = NprIndicatorSource(retry_attempts=3, retry_delay_seconds=5, sleep=sleeps.append)
+    result = source.collect()
+
+    assert result.has_content is True
+    assert "Monday transcript." in result.prompt_text
+    assert "EPISODE: Monday show" in result.prompt_text
+    assert "Friday indicators" not in result.prompt_text
+    assert sleeps == [5, 5]
+    assert mock_fetch.call_count == 4
+
+
+@patch("jobs.sources.fetch_transcript", return_value="Transcript text.")
+@patch("jobs.sources.get_episodes_for_calendar_week")
+def test_npr_source_accepts_short_holiday_week(mock_get_episodes, mock_fetch):
+    mock_get_episodes.return_value = [
+        _episode("Monday", slug="mon"),
+        _episode("Tuesday", slug="tue"),
+        _episode("Wednesday", slug="wed"),
+        _episode("Thursday", slug="thu"),
+    ]
+
+    source = NprIndicatorSource(retry_attempts=1)
+    result = source.collect()
+
+    assert result.has_content is True
+    assert result.prompt_text.count("EPISODE:") == 4
+    assert mock_fetch.call_count == 4
+
+
+@patch("jobs.sources.fetch_transcript", return_value=None)
+@patch("jobs.sources.get_episodes_for_calendar_week")
+def test_npr_source_empty_when_no_transcripts_ready(mock_get_episodes, mock_fetch):
+    mock_get_episodes.return_value = [_episode("Friday indicators", slug="fri")]
+
+    source = NprIndicatorSource(retry_attempts=2, retry_delay_seconds=1, sleep=lambda _: None)
     result = source.collect()
 
     assert result.has_content is False

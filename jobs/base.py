@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Callable, Protocol
 from zoneinfo import ZoneInfo
 
+from briefing_length import word_count
 from email_delivery import send_email
 from elevenlabs_client import clean_for_tts, generate_audio, get_api_key
 from gmail_client import GmailClient
@@ -42,6 +43,7 @@ class Job:
     build_source: Callable[[], Source]
     markdown_prefix: str | None = None
     enabled: bool = True
+    attach_audio: bool = False
 
 
 def format_date_display(now: datetime) -> str:
@@ -88,6 +90,7 @@ def run_job(job: Job, *, dry_run: bool = False) -> bool:
     print(f"[{job.key}] Summarizing...")
     full_prompt = f"{job.prompt}\n\n{result.prompt_text}"
     summary = generate_content(full_prompt, label=f"Gemini {job.key}")
+    print(f"[{job.key}] Summary length: {word_count(summary)} words.")
 
     now = datetime.now(TZ)
     date_display = format_date_display(now)
@@ -99,7 +102,7 @@ def run_job(job: Job, *, dry_run: bool = False) -> bool:
         markdown_body = summary
 
     audio_bytes = None
-    if get_api_key() and not dry_run and job.group == "daily":
+    if get_api_key() and not dry_run and job.attach_audio:
         try:
             audio_bytes = generate_audio(clean_for_tts(markdown_body))
         except Exception as exc:
@@ -111,7 +114,7 @@ def run_job(job: Job, *, dry_run: bool = False) -> bool:
         if result.dry_run_summary:
             print(result.dry_run_summary)
         print(markdown_body)
-        if get_api_key() and job.group == "daily":
+        if get_api_key() and job.attach_audio:
             print("Would generate audio attachment using ElevenLabs API.")
         print(f"--- END DRY RUN: {job.key} ---\n")
         return True

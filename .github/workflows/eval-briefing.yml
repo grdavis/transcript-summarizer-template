@@ -1,0 +1,78 @@
+name: Briefing hill climb
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Job key to hill-climb
+        default: newsletter_example
+        required: true
+      lookback_hours:
+        description: How far back to read source newsletters
+        default: "96"
+        required: true
+      max_days:
+        description: How many recent days to grade
+        default: "3"
+        required: true
+      target_min_words:
+        description: Optional word-count floor. Leave empty to ignore length.
+        default: ""
+        required: false
+      target_max_words:
+        description: Optional word-count ceiling. Set together with the floor.
+        default: ""
+        required: false
+
+jobs:
+  hillclimb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Hill-climb briefing setups
+        env:
+          PYTHONUNBUFFERED: "1"
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_HTTP_TIMEOUT_MS: "90000"
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: |
+          args=(
+            --job "${{ inputs.job }}"
+            --lookback-hours "${{ inputs.lookback_hours }}"
+            --max-days "${{ inputs.max_days }}"
+          )
+          min_words="${{ inputs.target_min_words }}"
+          max_words="${{ inputs.target_max_words }}"
+          if [ -n "$min_words" ] || [ -n "$max_words" ]; then
+            if [ -z "$min_words" ] || [ -z "$max_words" ]; then
+              echo "Set both word-target inputs, or leave both empty." >&2
+              exit 1
+            fi
+            args+=(--target-min-words "$min_words")
+            args+=(--target-max-words "$max_words")
+          fi
+          python -m eval.hillclimb "${args[@]}"
+
+      - name: Upload hill-climb results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: briefing-hillclimb
+          path: eval/results/
+          if-no-files-found: warn

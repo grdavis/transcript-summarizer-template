@@ -196,8 +196,14 @@ class GmailClient:
         self,
         senders: list[str],
         lookback_hours: int | None = None,
+        *,
+        peek: bool = False,
     ) -> list[EmailMessage]:
-        """Fetch inbox messages from allowlisted senders within the lookback window."""
+        """Fetch inbox messages from allowlisted senders within the lookback window.
+
+        `peek` uses BODY.PEEK so the server does not set \\Seen. The live job
+        leaves this off and marks mail read after a successful send.
+        """
 
         def _fetch() -> list[EmailMessage]:
             hours = lookback_hours if lookback_hours is not None else default_lookback_hours()
@@ -223,7 +229,9 @@ class GmailClient:
                     if uid_str in seen_uids:
                         continue
 
-                    status, fetched = self.conn.uid("fetch", uid, "(RFC822)")
+                    # RFC822 is BODY[] and sets \\Seen. PEEK leaves flags alone.
+                    fetch_item = "(BODY.PEEK[])" if peek else "(RFC822)"
+                    status, fetched = self.conn.uid("fetch", uid, fetch_item)
                     if status != "OK" or not fetched or not fetched[0]:
                         continue
 

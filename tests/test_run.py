@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from jobs.base import Job, SourceResult, run_job
 
 
@@ -16,7 +18,7 @@ class FakeSource:
         return self.result
 
 
-def _job_with_source(result: SourceResult) -> Job:
+def _job_with_source(result: SourceResult, *, attach_audio: bool = False) -> Job:
     return Job(
         key="test",
         display_name="Test",
@@ -25,6 +27,7 @@ def _job_with_source(result: SourceResult) -> Job:
         intro_template="Intro <strong>{date}</strong>.",
         prompt="Summarize this.",
         build_source=lambda: FakeSource(result),
+        attach_audio=attach_audio,
     )
 
 
@@ -33,12 +36,15 @@ def _job_with_source(result: SourceResult) -> Job:
 @patch("jobs.base.get_api_key", return_value="test-key")
 @patch("jobs.base.generate_content", return_value="## Briefing\n\nSummary text.")
 @patch("jobs.base.send_email")
-def test_run_job_generates_audio_for_daily_jobs(
+def test_run_job_generates_audio_when_attach_audio(
     mock_send, mock_generate, _mock_key, mock_audio, mock_client_cls
 ):
     deliver_client = MagicMock()
     mock_client_cls.return_value = deliver_client
-    job = _job_with_source(SourceResult(prompt_text="Source text here.", has_content=True))
+    job = _job_with_source(
+        SourceResult(prompt_text="Source text here.", has_content=True),
+        attach_audio=True,
+    )
 
     run_job(job, dry_run=False)
 
@@ -51,7 +57,10 @@ def test_run_job_generates_audio_for_daily_jobs(
 @patch("jobs.base.generate_content", return_value="## Briefing\n\nSummary text.")
 @patch("jobs.base.send_email")
 def test_run_job_skips_audio_on_dry_run(mock_send, _mock_generate, _mock_key, mock_audio):
-    job = _job_with_source(SourceResult(prompt_text="Source text here.", has_content=True))
+    job = _job_with_source(
+        SourceResult(prompt_text="Source text here.", has_content=True),
+        attach_audio=True,
+    )
 
     run_job(job, dry_run=True)
 
@@ -64,18 +73,13 @@ def test_run_job_skips_audio_on_dry_run(mock_send, _mock_generate, _mock_key, mo
 @patch("jobs.base.get_api_key", return_value="test-key")
 @patch("jobs.base.generate_content", return_value="Body text.")
 @patch("jobs.base.send_email")
-def test_run_job_skips_audio_for_weekly_jobs(
+def test_run_job_skips_audio_when_attach_audio_false(
     mock_send, _mock_generate, _mock_key, mock_audio, mock_client_cls
 ):
     mock_client_cls.return_value = MagicMock()
-    job = Job(
-        key="test",
-        display_name="Test",
-        group="weekly",
-        subject_prefix="Weekly Summary",
-        intro_template="Intro <strong>{date}</strong>.",
-        prompt="Summarize.",
-        build_source=lambda: FakeSource(SourceResult(prompt_text="Transcripts.", has_content=True)),
+    job = _job_with_source(
+        SourceResult(prompt_text="Source text here.", has_content=True),
+        attach_audio=False,
     )
 
     run_job(job, dry_run=False)
@@ -187,3 +191,36 @@ def test_run_job_markdown_prefix_in_live_run(mock_send, _mock_generate, mock_cli
     markdown_body = mock_send.call_args.kwargs["markdown_body"]
     assert markdown_body.startswith("# Weekly Summary - ")
     assert markdown_body.endswith("Body text.")
+
+
+@patch("run._run_jobs")
+@patch("run.time.sleep")
+def test_main_retries_failed_jobs_once(mock_sleep, mock_run_jobs):
+    import run as run_module
+    from jobs import REGISTRY
+
+    newsletter_example = next(job for job in REGISTRY if job.key == "newsletter_example")
+    mock_run_jobs.side_effect = [[newsletter_example], []]
+
+    with patch("sys.argv", ["run.py", "--group", "daily"]):
+        run_module.main()
+
+    assert mock_run_jobs.call_count == 2
+    mock_sleep.assert_called_once_with(run_module.RETRY_PAUSE_SECONDS)
+
+
+@patch("run._run_jobs")
+@patch("run.time.sleep")
+def test_main_exits_nonzero_when_retry_also_fails(mock_sleep, mock_run_jobs):
+    import run as run_module
+    from jobs import REGISTRY
+
+    newsletter_example = next(job for job in REGISTRY if job.key == "newsletter_example")
+    mock_run_jobs.side_effect = [[newsletter_example], [newsletter_example]]
+
+    with patch("sys.argv", ["run.py", "--group", "daily"]):
+        with pytest.raises(SystemExit) as exc:
+            run_module.main()
+
+    assert exc.value.code == 1
+    mock_sleep.assert_called_once()

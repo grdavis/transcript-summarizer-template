@@ -36,6 +36,7 @@ JOBS: list[Job] = [
         subject_prefix="Newsletter Briefing",
         prompt=NEWSLETTER_EXAMPLE_PROMPT,
         intro_template="Your newsletter briefing for <strong>{date}</strong> is below.",
+        attach_audio=True,
         build_source=lambda: GmailSource(
             senders=[
                 "newsletter@example.com",

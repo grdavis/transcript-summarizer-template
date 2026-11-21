@@ -1,8 +1,9 @@
 name: Daily Newsletter Briefing (example)
 
-# Example workflow for Gmail-based daily jobs.
-# Add your own schedule cron once senders and prompts are configured.
-# See README.md for setup.
+# Example workflow for Gmail-based daily jobs. Actions cron is UTC, so this
+# file has no cron and is started with workflow_dispatch from an external
+# scheduler in your timezone (see README). ffmpeg is only needed when a job
+# sets attach_audio=True; a failed install still sends the text briefing.
 
 on:
   workflow_dispatch:
@@ -14,6 +15,7 @@ concurrency:
 jobs:
   briefings:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -30,8 +32,53 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install ffmpeg
+        # ffmpeg only speeds up the AI & Tech MP3. Audio generation already
+        # fails open inside Python, but this step used to run an unbounded
+        # apt-get in front of every briefing. DNS to the Azure Ubuntu mirror
+        # failed for ~37 minutes on 2026-11-11, and the same step was cancelled
+        # at the 60-minute job limit on 2026-08-19. Stay on Ubuntu's signed
+        # package, cap each attempt, and still send text briefings if both fail.
+        run: |
+          set -euo pipefail
+
+          if command -v ffmpeg >/dev/null 2>&1; then
+            ffmpeg -version | head -n 1
+            exit 0
+          fi
+
+          export DEBIAN_FRONTEND=noninteractive
+          apt_opts=(
+            -o Acquire::Retries=2
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+          )
+          installed=0
+          for attempt in 1 2; do
+            echo "Installing ffmpeg from apt (attempt ${attempt})"
+            if timeout 180 sudo apt-get update "${apt_opts[@]}" \
+              && timeout 180 sudo apt-get install -y "${apt_opts[@]}" --no-install-recommends ffmpeg; then
+              installed=1
+              break
+            fi
+            echo "apt install of ffmpeg failed (attempt ${attempt})" >&2
+            sleep 5
+          done
+
+          if [ "$installed" -ne 1 ] || ! command -v ffmpeg >/dev/null 2>&1; then
+            echo "::warning::ffmpeg is not available. Text briefings will still send; the audio attachment will be skipped."
+            exit 0
+          fi
+
+          ffmpeg -version | head -n 1
+          if ! ffmpeg -hide_banner -filters 2>/dev/null | grep -q atempo; then
+            echo "::warning::ffmpeg has no atempo filter. Text briefings will still send; audio speed-up will fail."
+          fi
+
       - name: Run newsletter briefings
         env:
+          # Unbuffered logs so Gemini retries appear before a cancel/timeout.
+          PYTHONUNBUFFERED: "1"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODELS: ${{ secrets.GEMINI_MODELS }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}

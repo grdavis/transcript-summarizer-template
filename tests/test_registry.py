@@ -22,3 +22,8 @@ def test_all_jobs_have_prompts_and_subjects():
         assert job.prompt.strip()
         assert job.subject_prefix.strip()
         assert job.intro_template.strip()
+
+
+def test_audio_is_opt_in():
+    audio_jobs = {job.key for job in REGISTRY if job.attach_audio}
+    assert audio_jobs == {"newsletter_example"}
