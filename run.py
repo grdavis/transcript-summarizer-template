@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 import traceback
 
 from dotenv import load_dotenv
@@ -13,6 +14,8 @@ from jobs import REGISTRY, Job
 from jobs.base import run_job
 
 load_dotenv()
+
+RETRY_PAUSE_SECONDS = 60
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,20 +57,38 @@ def selected_jobs(*, only: str | None, group: str | None) -> list[Job]:
     return REGISTRY
 
 
+def _run_jobs(jobs: list[Job], *, dry_run: bool) -> list[Job]:
+    """Run jobs once. Returns the list of jobs that raised."""
+    failed: list[Job] = []
+    for job in jobs:
+        try:
+            run_job(job, dry_run=dry_run)
+        except Exception as exc:
+            failed.append(job)
+            print(f"[{job.key}] Failed: {exc}", file=sys.stderr)
+            traceback.print_exc()
+    return failed
+
+
 def main() -> None:
     args = parse_args()
     jobs = selected_jobs(only=args.only, group=args.group)
 
-    failures = 0
-    for job in jobs:
-        try:
-            run_job(job, dry_run=args.dry_run)
-        except Exception as exc:
-            failures += 1
-            print(f"[{job.key}] Failed: {exc}", file=sys.stderr)
-            traceback.print_exc()
+    failed = _run_jobs(jobs, dry_run=args.dry_run)
 
-    if failures:
+    if failed and not args.dry_run:
+        keys = ", ".join(job.key for job in failed)
+        print(
+            f"\nRetrying {len(failed)} failed job(s) ({keys}) "
+            f"after {RETRY_PAUSE_SECONDS}s pause...",
+            file=sys.stderr,
+        )
+        time.sleep(RETRY_PAUSE_SECONDS)
+        failed = _run_jobs(failed, dry_run=False)
+
+    if failed:
+        keys = ", ".join(job.key for job in failed)
+        print(f"Failed jobs after retry: {keys}", file=sys.stderr)
         raise SystemExit(1)
 
 

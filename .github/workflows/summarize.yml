@@ -2,13 +2,19 @@ name: Weekly NPR Indicator Summarizer
 
 on:
   schedule:
-    # Run every Friday at 22:00 UTC (afternoon in US timezones).
-    - cron: "0 22 * * 5"
-  workflow_dispatch:
+    # Saturday 15:00 UTC (11:00 AM Eastern / 8:00 AM Pacific). Friday's
+    # Indicator episode is typically in the RSS feed by Friday afternoon, but
+    # NPR often has not published the transcript page yet — a Friday 22:00 UTC
+    # run silently dropped that show from the brief.
+    - cron: '0 15 * * 6'
+  workflow_dispatch: # Allow manual triggering for testing
 
 jobs:
   summarize:
     runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write # Required to commit the summary back to the repo
 
     steps:
       - name: Checkout repository
@@ -17,8 +23,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: pip
+          python-version: '3.11'
+          cache: 'pip' # Cache pip dependencies
 
       - name: Install dependencies
         run: |
@@ -32,7 +38,13 @@ jobs:
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-        run: python run.py --group weekly
+        run: |
+          python run.py --group weekly
 
-      # NPR summaries are also saved locally via NprIndicatorSource.on_success.
-      # To commit them back to the repo, add a git commit/push step here.
+      - name: Commit and push summary
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add summaries/
+          # Only commit if there are changes
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Add weekly NPR Indicator summary" && git push)

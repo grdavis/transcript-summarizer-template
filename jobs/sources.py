@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from typing import Callable
 
 from gmail_client import EmailMessage, GmailClient
 from jobs.base import SourceResult
 from scraper import fetch_transcript, get_episodes_for_calendar_week
+
+# Friday's Indicator episode is often in the RSS feed before NPR publishes
+# the transcript page. Retry missing fetches instead of silently dropping them.
+NPR_TRANSCRIPT_RETRY_ATTEMPTS = 4
+NPR_TRANSCRIPT_RETRY_DELAY_SECONDS = 20.0
 
 
 def format_newsletters_for_prompt(emails: list[EmailMessage]) -> str:
@@ -104,35 +110,41 @@ def _save_npr_summary(markdown_body: str) -> None:
 class NprIndicatorSource:
     """Fetch NPR Indicator transcripts for the current calendar week."""
 
+    def __init__(
+        self,
+        *,
+        retry_attempts: int = NPR_TRANSCRIPT_RETRY_ATTEMPTS,
+        retry_delay_seconds: float = NPR_TRANSCRIPT_RETRY_DELAY_SECONDS,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.retry_attempts = retry_attempts
+        self.retry_delay_seconds = retry_delay_seconds
+        self._sleep = sleep
+
     def collect(self) -> SourceResult:
         episodes = get_episodes_for_calendar_week()
         if not episodes:
             return SourceResult(prompt_text="", has_content=False)
 
-        combined_text = ""
-        fetched = 0
-        for idx, ep in enumerate(episodes, 1):
-            print(f"[{idx}/{len(episodes)}] Fetching transcript for: {ep['title']}")
-            transcript = fetch_transcript(ep["transcript_url"])
-            if transcript:
-                fetched += 1
-                combined_text += (
-                    f"\n\n{'=' * 50}\n"
-                    f"EPISODE: {ep['title']}\n"
-                    f"PUBLISHED: {ep['published']}\n"
-                    f"{'=' * 50}\n\n"
-                )
-                combined_text += transcript
-            else:
-                print(f"  -> Failed to fetch transcript for {ep['title']}")
-
-        if not combined_text.strip():
+        transcripts = self._fetch_all_transcripts(episodes)
+        included = [ep for ep in episodes if ep["transcript_url"] in transcripts]
+        if not included:
             return SourceResult(prompt_text="", has_content=False)
+
+        combined_text = ""
+        for ep in included:
+            combined_text += (
+                f"\n\n{'=' * 50}\n"
+                f"EPISODE: {ep['title']}\n"
+                f"PUBLISHED: {ep['published']}\n"
+                f"{'=' * 50}\n\n"
+            )
+            combined_text += transcripts[ep["transcript_url"]]
 
         print(f"Extracted {len(combined_text)} characters of transcript data.")
         date_str = datetime.now().strftime("%Y-%m-%d")
         prompt_text = (
-            f"Here are the transcripts from {fetched} episode(s):\n\n{combined_text}"
+            f"Here are the transcripts from {len(included)} episode(s):\n\n{combined_text}"
         )
         return SourceResult(
             prompt_text=prompt_text,
@@ -140,3 +152,39 @@ class NprIndicatorSource:
             dry_run_summary=f"Would save summary to summaries/{date_str}-indicator-summary.md",
             on_success=_save_npr_summary,
         )
+
+    def _fetch_all_transcripts(self, episodes: list[dict]) -> dict[str, str]:
+        """Fetch every episode transcript, retrying ones that are not published yet."""
+        transcripts: dict[str, str] = {}
+        pending = list(episodes)
+
+        for attempt in range(1, self.retry_attempts + 1):
+            still_pending: list[dict] = []
+            for idx, ep in enumerate(pending, 1):
+                label = f"[{idx}/{len(pending)}]"
+                if attempt > 1:
+                    label += f" retry {attempt}/{self.retry_attempts}"
+                print(f"{label} Fetching transcript for: {ep['title']}")
+                transcript = fetch_transcript(ep["transcript_url"])
+                if transcript:
+                    transcripts[ep["transcript_url"]] = transcript
+                else:
+                    print(f"  -> Transcript not ready for {ep['title']}")
+                    still_pending.append(ep)
+
+            pending = still_pending
+            if not pending:
+                return transcripts
+            if attempt < self.retry_attempts:
+                print(
+                    f"Waiting {self.retry_delay_seconds:.0f}s for "
+                    f"{len(pending)} unpublished transcript(s)..."
+                )
+                self._sleep(self.retry_delay_seconds)
+
+        titles = ", ".join(ep["title"] for ep in pending)
+        print(
+            f"Skipping {len(pending)} episode(s) without a transcript: {titles}. "
+            "Continuing with the rest of the week."
+        )
+        return transcripts

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from gmail_client import (
     EmailMessage,
+    GmailClient,
     extract_body,
     imap_since_date,
     lookback_cutoff,
@@ -63,6 +64,36 @@ def test_within_lookback_boundary():
 def test_imap_since_date_format():
     dt = datetime(2026, 6, 25, 8, 15, tzinfo=TZ)
     assert imap_since_date(dt) == "25-Jun-2026"
+
+
+def test_peek_fetch_does_not_request_rfc822():
+    raw = _load_fixture("plain.eml")
+    calls: list[tuple] = []
+    conn = type("Conn", (), {})()
+
+    def uid(command, *args):
+        calls.append((command, args))
+        if command == "search":
+            return "OK", [b"7"]
+        return "OK", [(b"7 (BODY[] {1}", raw)]
+
+    conn.uid = uid
+    client = GmailClient(
+        address="reader@example.com",
+        app_password="secret",
+        now=lambda: datetime(2026, 6, 25, 12, 0, tzinfo=TZ),
+    )
+    client._conn = conn
+
+    messages = client.fetch_from_senders(
+        ["newsletter@example.com"],
+        lookback_hours=24,
+        peek=True,
+    )
+
+    assert [message.uid for message in messages] == ["7"]
+    fetch_calls = [args for command, args in calls if command == "fetch"]
+    assert fetch_calls == [(b"7", "(BODY.PEEK[])")]
 
 
 def test_email_message_frozen():
